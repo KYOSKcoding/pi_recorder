@@ -2,58 +2,54 @@
 
 import RPi.GPIO as GPIO
 import subprocess
-import sys
-from time import sleep
+import json
+import signal
+import os
 from datetime import datetime
 from os import path
 import asyncio
 
-# Config
 record_path = "/data/record"
+status_file = "/tmp/recorder_status.json"
+pid_file    = "/tmp/recorder.pid"
 
-# LED states
 STATE_STANDBY = 'standby'
-STATE_RECORD = 'record'
+STATE_RECORD  = 'record'
 
-# Initial state
 state = None
-p = None
+p     = None
 
-def state_toggle(): 
+def write_status(recording, filename=None, started=None):
+    try:
+        with open(status_file, 'w') as f:
+            json.dump({'recording': recording, 'filename': filename, 'started': started}, f)
+    except Exception as e:
+        print("Status write failed: " + str(e))
+
+def state_toggle():
     global state
     print("state toggle (was " + str(state) + ")")
-    newstate = None
-    if state is STATE_STANDBY:
-        newstate = STATE_RECORD
+    if state == STATE_STANDBY:
+        state = STATE_RECORD
         record_start()
-    if state is STATE_RECORD or state is None:
-        newstate = STATE_STANDBY
+    else:
+        state = STATE_STANDBY
         record_stop()
-    print("state toggle (now " + str(newstate) + ")")
-    state = newstate
+    print("state toggle (now " + str(state) + ")")
 
 def button_callback(channel):
     print("button pressed")
     state_toggle()
 
 def record_start():
-    global p, record_path
+    global p
     now = datetime.now()
-    datestring = now.strftime("%Y-%m-%d_%H-%M-%S")
-    filename = datestring + ".wav"
+    filename = now.strftime("%Y-%m-%d_%H-%M-%S") + ".wav"
     filepath = path.join(record_path, filename)
-
-    command = [
-        "arecord",
-        "-D", "hw:1,0",
-        "-f", "S16_LE",
-        "-c", "2",
-        "-r", "44100",
-        filepath
-    ]
-
-    print("start record: " + str(filepath))
+    command  = ["arecord", "-D", "hw:1,0", "-f", "S16_LE", "-c", "2", "-r", "44100", filepath]
+    print("start record: " + filepath)
     p = subprocess.Popen(command)
+    write_status(True, filename, now.isoformat())
 
 def record_stop():
     global p
@@ -61,63 +57,45 @@ def record_stop():
     if p:
         p.kill()
     p = None
+    write_status(False)
 
-def setup ():
-    # setup event loop
+def cleanup_pid():
+    try:
+        os.remove(pid_file)
+    except Exception:
+        pass
+
+def setup():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     GPIO.cleanup()
-
-    # Use physical pin numbering convention (also called P1 or BOARD)
     GPIO.setmode(GPIO.BOARD)
-
-    # Pin 23: IN for button
     GPIO.setup(23, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-
-    # Pin 11: OUT for LED
     GPIO.setup(11, GPIO.OUT)
+    GPIO.add_event_detect(23, GPIO.RISING, callback=button_callback, bouncetime=500)
 
-    # Pin 23: Detect rising edge and invoke button callback
-    GPIO.add_event_detect(23,GPIO.RISING,callback=button_callback, bouncetime=500)
+    # Write PID so server.js can send SIGUSR1 for web-triggered toggles
+    with open(pid_file, 'w') as f:
+        f.write(str(os.getpid()))
 
-    # Init state machine
-    state_toggle()
+    # SIGUSR1 → web-triggered record toggle (runs safely inside event loop)
+    loop.add_signal_handler(signal.SIGUSR1, state_toggle)
 
-    # Run async event loop
-    loop.run_until_complete(asyncio.gather(async_runner()))
+    state_toggle()  # enter STANDBY
+    try:
+        loop.run_until_complete(async_runner())
+    finally:
+        cleanup_pid()
 
 async def async_runner():
-    global state
     on = False
-    mode = "on"
     while True:
-        if state is STATE_RECORD:
-            mode = "flash"
-        else:
-            mode = "on"
-
-        # print("loop, state: " + str(state) + " - led: " + mode + " - blink: " + str(on))
-        if mode is "flash":
-            if on:
-                GPIO.output(11, GPIO.LOW)
-                on = False
-            else:
-                GPIO.output(11, GPIO.HIGH)
-                on = True
+        if state == STATE_RECORD:
+            GPIO.output(11, GPIO.HIGH if on else GPIO.LOW)
+            on = not on
         else:
             GPIO.output(11, GPIO.HIGH)
-
         await asyncio.sleep(0.5)
-           
-
-async def debug_runner():
-    while True:
-        await wait_for_button()
-
-async def wait_for_button():
-    GPIO.wait_for_edge(23, GPIO.RISING)
-    print("EVENT RISING")
 
 setup()
-run()

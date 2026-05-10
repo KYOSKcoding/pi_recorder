@@ -1,13 +1,73 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>KYOSK STATION</title>
-    <script src="./bundle.js"></script>
-  </head>
-  <body>
-    <div id="waveform"></div>
-    <h1>KYOSK STATION</h1>
-    <div id='root'></div>
-  </body>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KYOSK RECORDER</title>
+  <link rel="stylesheet" href="./recorder.css">
+</head>
+<body>
+  <div class="radio-container">
+
+    <div class="radio-header">
+      <h1>KYOSK RECORDER</h1>
+      <div class="radio-track" id="statusLine">initializing…</div>
+    </div>
+
+    <!-- REC status indicator -->
+    <div class="radio-control">
+      <div class="toggle-switch off" id="recIndicator">
+        <span class="switch-inner" id="recInner">REC</span>
+      </div>
+      <div class="status-indicator">
+        <span class="status-text" id="recStatus">○ STANDBY</span>
+        <span class="time-display" id="recDuration" style="display:none"></span>
+      </div>
+      <div class="disk-free" id="diskFree"></div>
+    </div>
+
+    <!-- Main controls -->
+    <div class="btn-row">
+      <button class="play-button" id="recBtn">⬤ START REC</button>
+      <button class="live-button" id="streamBtn">⚡ STREAM LIVE</button>
+      <button class="live-button kyo-live-btn" id="kyoLiveBtn" style="display:none">● GO LIVE ON KYO.SK</button>
+    </div>
+
+    <!-- Waveform player (shown when a recording is selected) -->
+    <div id="playerSection" style="display:none">
+      <div class="player-header">
+        <span class="song-label">NOW PLAYING</span>
+        <span class="time-info">
+          <span class="time" id="currentTime">0:00</span>
+          <span class="time-sep">/</span>
+          <span class="time" id="trackDuration">0:00</span>
+        </span>
+      </div>
+      <div class="now-playing-name" id="nowPlayingName"></div>
+      <div id="waveform"></div>
+      <div class="playlist-controls">
+        <button class="nav-btn" id="prevBtn" title="Previous">⏮</button>
+        <button class="play-pause-btn" id="playPauseBtn" disabled>↻</button>
+        <button class="nav-btn" id="nextBtn" title="Next">⏭</button>
+        <div class="vol-group">
+          <span class="vol-icon">🔊</span>
+          <input type="range" class="volume-slider-vert" id="volumeSlider"
+                 min="0" max="100" value="80" title="Volume">
+        </div>
+      </div>
+    </div>
+
+    <!-- File list -->
+    <div class="song-section">
+      <div class="song-header">
+        <span class="song-label">RECORDINGS</span>
+        <button class="play-pause-btn" id="refreshBtn" title="Refresh">↻</button>
+      </div>
+      <ul class="file-list" id="fileList"></ul>
+    </div>
+
+  </div>
+
+  <script src="./recorder.js"></script>
+</body>
 </html>

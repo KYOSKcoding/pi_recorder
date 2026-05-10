@@ -1,1 +1,9 @@
-Rpi.GPIO >= 0.6.5
+# Python GPIO library — install via apt, NOT pip:
+#   sudo apt install python3-rpi-lgpio
+#
+# python3-rpi-lgpio is a drop-in replacement for RPi.GPIO that works on
+# Raspberry Pi OS Bookworm (kernel 6.6+). The original RPi.GPIO package
+# (python3-rpi.gpio) is broken on Bookworm and must be removed:
+#   sudo apt remove python3-rpi.gpio
+#
+# No pip packages are required.
