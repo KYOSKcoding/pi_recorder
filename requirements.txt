@@ -7,3 +7,4 @@
 #   sudo apt remove python3-rpi.gpio
 #
 # No pip packages are required.
+
