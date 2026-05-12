@@ -29,9 +29,12 @@
     <!-- Main controls -->
     <div class="btn-row">
       <button class="play-button" id="recBtn">⬤ START REC</button>
-      <button class="live-button" id="streamBtn">⚡ STREAM LIVE</button>
-      <button class="live-button kyo-live-btn" id="kyoLiveBtn" style="display:none">● GO LIVE ON KYO.SK</button>
+      <button class="monitor-button" id="monitorBtn">🔊 MONITOR</button>
+      <button class="live-button" id="liveBtn">● GO LIVE</button>
     </div>
+    <audio id="monitorAudio" preload="none"></audio>
+
+    <div class="stream-error" id="streamError" style="display:none"></div>
 
     <!-- Waveform player (shown when a recording is selected) -->
     <div id="playerSection" style="display:none">

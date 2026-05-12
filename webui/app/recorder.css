@@ -110,6 +110,7 @@ body {
 }
 
 .disk-free { font-size: 0.75em; color: #004400; }
+.stream-error { font-size: 0.75em; color: #ff4444; margin: 4px 0; }
 
 /* Button row */
 .btn-row {
@@ -174,6 +175,34 @@ body {
 }
 
 .live-button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Monitor button — cyan tint */
+.monitor-button {
+  padding: 11px 0;
+  width: 180px;
+  border: 2px solid #00cccc;
+  background: rgba(0,204,204,0.08);
+  color: #00cccc;
+  font-family: 'Courier New', monospace;
+  font-size: 1.05em;
+  font-weight: bold;
+  border-radius: 4px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: all 0.25s ease;
+}
+
+.monitor-button:hover:not(:disabled) {
+  background: rgba(0,204,204,0.18);
+  box-shadow: 0 0 14px rgba(0,204,204,0.4);
+}
+
+.monitor-button.active {
+  background: rgba(0,204,204,0.22);
+  box-shadow: 0 0 14px rgba(0,204,204,0.5);
+}
+
+.monitor-button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* kyo.sk Go Live — green tint to distinguish from stream */
 .kyo-live-btn {
@@ -472,5 +501,5 @@ body {
 @media (max-width: 560px) {
   .radio-container { padding: 25px 15px; }
   .radio-header h1 { font-size: 1.6em; }
-  .play-button, .live-button { width: 100%; }
+  .play-button, .live-button, .monitor-button { width: 100%; }
 }

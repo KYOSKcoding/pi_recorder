@@ -8,8 +8,7 @@
       // State
       this.recording  = false
       this.streaming  = false
-      this.kyoLive    = false
-      this.kyoConfigured = false
+      this.monitoring = false
       this.durationStart = null
       this.durationTimer = null
 
@@ -27,8 +26,10 @@
       this.recDuration   = document.getElementById('recDuration')
       this.diskFreeEl    = document.getElementById('diskFree')
       this.recBtn        = document.getElementById('recBtn')
-      this.streamBtn     = document.getElementById('streamBtn')
-      this.kyoLiveBtn    = document.getElementById('kyoLiveBtn')
+      this.monitorBtn    = document.getElementById('monitorBtn')
+      this.monitorAudio  = document.getElementById('monitorAudio')
+      this.streamErrorEl = document.getElementById('streamError')
+      this.liveBtn       = document.getElementById('liveBtn')
       this.fileList      = document.getElementById('fileList')
       this.refreshBtn    = document.getElementById('refreshBtn')
 
@@ -47,8 +48,8 @@
 
     init () {
       this.recBtn.addEventListener('click', () => this.handleRecToggle())
-      this.streamBtn.addEventListener('click', () => this.handleStreamToggle())
-      this.kyoLiveBtn.addEventListener('click', () => this.handleKyoLiveToggle())
+      this.monitorBtn.addEventListener('click', () => this.handleMonitorToggle())
+      this.liveBtn.addEventListener('click', () => this.handleLiveToggle())
       this.refreshBtn.addEventListener('click', () => this.loadFiles())
 
       this.playPauseBtn.addEventListener('click', () => this.handlePlayPause())
@@ -66,9 +67,6 @@
 
       // Load WaveSurfer from CDN, then init
       this.loadWaveSurfer()
-
-      // Check kyo.sk configuration (server-side token)
-      this.checkKyoConfigured()
 
       // Start polling
       this.pollStatus()
@@ -209,6 +207,7 @@
       var wasRecording = this.recording
       this.recording = data.recording
       this.streaming = data.streaming || false
+      this.monitoring = data.monitoring || false
 
       if (data.recording) {
         this.recIndicator.className = 'toggle-switch on'
@@ -231,8 +230,20 @@
         }
       }
 
-      this.streamBtn.textContent = this.streaming ? '■ STOP STREAM' : '⚡ STREAM LIVE'
-      this.streamBtn.classList.toggle('active', this.streaming)
+      this.monitorBtn.textContent = this.monitoring ? '■ STOP MONITOR' : '🔊 MONITOR'
+      this.monitorBtn.classList.toggle('active', this.monitoring)
+      this.monitorBtn.disabled = this.streaming
+
+      this.liveBtn.textContent = this.streaming ? '■ STOP LIVE' : '● GO LIVE'
+      this.liveBtn.classList.toggle('active', this.streaming)
+      this.liveBtn.disabled = this.monitoring
+
+      if (data.lastStreamError && !this.streaming) {
+        this.streamErrorEl.textContent = data.lastStreamError
+        this.streamErrorEl.style.display = ''
+      } else {
+        this.streamErrorEl.style.display = 'none'
+      }
 
       this.diskFreeEl.textContent = data.diskFree ? data.diskFree + ' free' : ''
     }
@@ -271,65 +282,42 @@
       }
     }
 
-    async handleStreamToggle () {
-      this.streamBtn.disabled = true
-      try {
-        var url = this.streaming ? '/api/stream/stop' : '/api/stream/start'
-        var r = await fetch(url, { method: 'POST' })
-        if (!r.ok) throw new Error('HTTP ' + r.status)
-        var data = await r.json()
-        this.streaming = data.streaming
-        this.streamBtn.textContent = this.streaming ? '■ STOP STREAM' : '⚡ STREAM LIVE'
-        this.streamBtn.classList.toggle('active', this.streaming)
-      } catch (e) {
-        alert('Stream toggle failed: ' + e.message)
-      } finally {
-        this.streamBtn.disabled = false
+    handleMonitorToggle () {
+      if (this.monitoring) {
+        this.monitorAudio.pause()
+        this.monitorAudio.removeAttribute('src')
+        this.monitorAudio.load()
+        this.monitoring = false
+        this.monitorBtn.textContent = '🔊 MONITOR'
+        this.monitorBtn.classList.remove('active')
+      } else {
+        this.monitorAudio.src = '/api/monitor'
+        this.monitorAudio.play().catch(e => {
+          console.warn('monitor play failed:', e)
+          this.monitorAudio.removeAttribute('src')
+          this.monitoring = false
+          this.monitorBtn.textContent = '🔊 MONITOR'
+          this.monitorBtn.classList.remove('active')
+        })
+        this.monitoring = true
+        this.monitorBtn.textContent = '■ STOP MONITOR'
+        this.monitorBtn.classList.add('active')
       }
     }
 
-    // ── kyo.sk Go Live (server-side token, no browser login) ──
+    // ── Live streaming ────────────────────────────────────────
 
-    async checkKyoConfigured () {
+    async handleLiveToggle () {
+      this.liveBtn.disabled = true
       try {
-        var r = await fetch('/api/kyo/configured')
-        var data = await r.json()
-        this.kyoConfigured = data.configured
-        if (this.kyoConfigured) {
-          this.kyoLiveBtn.style.display = ''
-          this.fetchKyoState()
-        }
-      } catch (e) {}
-    }
-
-    async fetchKyoState () {
-      try {
-        var r = await fetch('/api/kyo/state')
-        if (!r.ok) return
-        var data = await r.json()
-        this.kyoLive = data.live_mode || false
-        this.updateKyoLiveBtn()
-      } catch (e) {}
-    }
-
-    async handleKyoLiveToggle () {
-      this.kyoLiveBtn.disabled = true
-      try {
-        var url = this.kyoLive ? '/api/kyo/live/stop' : '/api/kyo/live/start'
+        var url = this.streaming ? '/api/live/stop' : '/api/live/start'
         var r = await fetch(url, { method: 'POST' })
         if (!r.ok) throw new Error('HTTP ' + r.status)
-        this.kyoLive = !this.kyoLive
-        this.updateKyoLiveBtn()
       } catch (e) {
-        alert('kyo.sk live toggle failed: ' + e.message)
+        alert('Go Live failed: ' + e.message)
       } finally {
-        this.kyoLiveBtn.disabled = false
+        this.liveBtn.disabled = false
       }
-    }
-
-    updateKyoLiveBtn () {
-      this.kyoLiveBtn.textContent = this.kyoLive ? '● KYO.SK LIVE ON' : '● GO LIVE ON KYO.SK'
-      this.kyoLiveBtn.classList.toggle('active', this.kyoLive)
     }
 
     // ── File list ─────────────────────────────────────────────
@@ -384,11 +372,15 @@
             var r = await fetch('/api/delete/' + encodeURIComponent(file.name), { method: 'DELETE' })
             if (r.ok) {
               li.remove()
+              this.files.splice(idx, 1)
               if (idx === this.trackIdx) {
                 this.trackIdx = -1
                 this.playerSection.style.display = 'none'
                 if (this.wavesurfer) this.wavesurfer.empty()
+              } else if (idx < this.trackIdx) {
+                this.trackIdx--
               }
+              this.loadFiles()
             } else {
               alert('Delete failed')
             }
@@ -436,7 +428,7 @@
     showDownloadModal (file) {
       var dlFolder = localStorage.getItem('dl_folder') || '~/Downloads'
       var genre    = localStorage.getItem('dl_genre')  || 'electronic'
-      var script   = '~/Nextcloud3/KYOSKcoding/pi_recorder/process_recordings.py'
+      var script   = '~/Nextcloud/KYOSKcoding/pi_recorder/process_recordings.py'
 
       var modal = document.createElement('div')
       modal.className = 'convert-modal'

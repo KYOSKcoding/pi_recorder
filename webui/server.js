@@ -2,59 +2,20 @@ const express = require('express')
 const bodyParser = require('body-parser')
 const fs = require('fs')
 const p = require('path')
-const os = require('os')
 const { execSync, spawn } = require('child_process')
-const https = require('https')
 
 const config = {
   port: 8080,
   host: '0.0.0.0',
   recpath: p.resolve(process.env.RECORD_PATH || '/data/record'),
   statusFile: '/tmp/recorder_status.json',
-  pidFile: '/tmp/recorder.pid',
-  kyoHost: 'kyo.sk',
-  kyoPassFile: p.join(os.homedir(), '.kyo_pass')
+  pidFile: '/tmp/recorder.pid'
 }
 
 const app = express()
 let streamProc = null
-let kyoToken = null
-
-// Auto-authenticate with kyo.sk using ~/.kyo_pass on startup
-;(function initKyo () {
-  try {
-    const pass = fs.readFileSync(config.kyoPassFile, 'utf8').trim()
-    if (!pass) return
-    kyoAuthRequest(pass).then(token => {
-      if (token) { kyoToken = token; console.log('kyo.sk: authenticated') }
-      else console.log('kyo.sk: auth failed — check ~/.kyo_pass')
-    }).catch(e => console.log('kyo.sk: auth error —', e.message))
-  } catch (e) {
-    console.log('kyo.sk: no ~/.kyo_pass — Go Live disabled')
-  }
-})()
-
-function kyoAuthRequest (password) {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({ password })
-    const opts = {
-      hostname: config.kyoHost, port: 443,
-      path: '/kyosky/api/radio/auth', method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
-    }
-    const req = https.request(opts, res => {
-      let data = ''
-      res.on('data', c => { data += c })
-      res.on('end', () => {
-        try { const j = JSON.parse(data); resolve(j.authenticated ? j.token : null) }
-        catch (e) { resolve(null) }
-      })
-    })
-    req.on('error', reject)
-    req.write(body)
-    req.end()
-  })
-}
+let monitorProc = null
+let lastStreamError = null
 
 app.use('/', express.static(p.join(__dirname, 'app')))
 app.use('/rec', express.static(config.recpath))
@@ -77,6 +38,8 @@ app.get('/api/status', function (req, res, next) {
   } catch (e) { status.diskFree = null }
 
   status.streaming = !!streamProc
+  status.monitoring = !!monitorProc
+  status.lastStreamError = lastStreamError
   res.json(status)
 })
 
@@ -86,6 +49,7 @@ app.delete('/api/delete/:file', function (req, res, next) {
   const fpath = filePath(file)
   fs.unlink(fpath, err => {
     if (err) return next(err)
+    console.log('deleted', file)
     fs.unlink(fpath + '.json', () => res.status(200).send())
   })
 })
@@ -114,42 +78,37 @@ app.post('/api/record/toggle', function (req, res, next) {
   }
 })
 
-app.post('/api/stream/start', function (req, res, next) {
-  if (streamProc) return res.json({ streaming: true })
+// Monitor — streams ALSA input as MP3 to browser for pre-flight check
+app.get('/api/monitor', function (req, res) {
+  if (streamProc) return res.status(409).send('Cannot monitor while live')
+  stopMonitor()
+  res.setHeader('Content-Type', 'audio/mpeg')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
   const args = [
     '-f', 'alsa', '-i', 'hw:1,0',
-    '-af', 'volume=8,acompressor=threshold=0.25:ratio=4:attack=5:release=200:makeup=2.5',
+    '-ar', '44100', '-ac', '2',
     '-acodec', 'libmp3lame', '-b:a', '128k',
-    '-vn', '-f', 'flv', 'rtmp://kyo.sk:45860/live/stream'
+    '-f', 'mp3', 'pipe:1'
   ]
-  streamProc = spawn('ffmpeg', args, { stdio: 'ignore' })
-  streamProc.on('exit', () => { streamProc = null })
+  monitorProc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  monitorProc.stdout.pipe(res)
+  monitorProc.stderr.on('data', d => process.stderr.write('[monitor] ' + d))
+  req.on('close', stopMonitor)
+  monitorProc.on('exit', () => { monitorProc = null; if (!res.writableEnded) res.end() })
+})
+
+// Live stream — kyo.sk server auto-detects connection and switches to live mode
+app.post('/api/live/start', function (req, res) {
+  stopMonitor()
+  startStream()
   res.json({ streaming: true })
 })
 
-app.post('/api/stream/stop', function (req, res, next) {
-  if (streamProc) { streamProc.kill(); streamProc = null }
+app.post('/api/live/stop', function (req, res) {
+  stopStream()
   res.json({ streaming: false })
-})
-
-// kyo.sk proxy — token managed server-side, no browser login needed
-app.get('/api/kyo/configured', function (req, res) {
-  res.json({ configured: !!kyoToken })
-})
-
-app.get('/api/kyo/state', function (req, res, next) {
-  if (!kyoToken) return res.json({ live_mode: false, configured: false })
-  kyoProxy('GET', '/api/radio/state', null, kyoToken, res, next)
-})
-
-app.post('/api/kyo/live/start', function (req, res, next) {
-  if (!kyoToken) return res.status(503).json({ error: 'kyo.sk not configured (create ~/.kyo_pass)' })
-  kyoProxyWithRetry('POST', '/api/radio/live/start', null, res, next)
-})
-
-app.post('/api/kyo/live/stop', function (req, res, next) {
-  if (!kyoToken) return res.status(503).json({ error: 'kyo.sk not configured (create ~/.kyo_pass)' })
-  kyoProxyWithRetry('POST', '/api/radio/live/stop', null, res, next)
 })
 
 app.use(function (err, req, res, next) {
@@ -157,54 +116,35 @@ app.use(function (err, req, res, next) {
   res.status(500).send(err.message)
 })
 
+function startStream () {
+  if (streamProc) return
+  lastStreamError = null
+  const args = [
+    '-f', 'alsa', '-i', 'hw:1,0',
+    '-ar', '44100', '-ac', '2',
+    '-af', 'volume=8,acompressor=threshold=0.25:ratio=4:attack=5:release=200:makeup=2.5',
+    '-acodec', 'libmp3lame', '-b:a', '128k',
+    '-vn', '-f', 'flv', 'rtmp://kyo.sk:45860/live/stream'
+  ]
+  streamProc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  streamProc.stderr.on('data', d => process.stderr.write('[ffmpeg] ' + d))
+  streamProc.on('exit', (code) => {
+    lastStreamError = code !== 0 ? `ffmpeg exited (code ${code})` : null
+    streamProc = null
+  })
+}
+
+function stopStream () {
+  if (streamProc) { streamProc.kill(); streamProc = null }
+}
+
+function stopMonitor () {
+  if (monitorProc) { monitorProc.kill(); monitorProc = null }
+}
+
 app.listen(config.port, config.host, () => {
   console.log(`Server listening ${config.host}:${config.port}`)
 })
-
-// kyo proxy with one automatic re-auth on 401
-function kyoProxyWithRetry (method, path, body, res, next) {
-  kyoProxy(method, path, body, kyoToken, res, next, true)
-}
-
-function kyoProxy (method, path, body, token, res, next, retry) {
-  const bodyStr = body ? JSON.stringify(body) : null
-  const headers = { 'Content-Type': 'application/json' }
-  if (token) headers['X-Broadcaster-Token'] = token
-  if (bodyStr) headers['Content-Length'] = Buffer.byteLength(bodyStr)
-
-  const opts = {
-    hostname: config.kyoHost, port: 443,
-    path: '/kyosky' + path, method, headers
-  }
-
-  const proxyReq = https.request(opts, proxyRes => {
-    let data = ''
-    proxyRes.on('data', c => { data += c })
-    proxyRes.on('end', () => {
-      if (proxyRes.statusCode === 401 && retry) {
-        // Token expired — re-auth and retry once
-        try {
-          const pass = fs.readFileSync(config.kyoPassFile, 'utf8').trim()
-          kyoAuthRequest(pass).then(newToken => {
-            if (newToken) {
-              kyoToken = newToken
-              kyoProxy(method, path, body, kyoToken, res, next, false)
-            } else {
-              res.status(401).json({ error: 'kyo.sk re-auth failed' })
-            }
-          }).catch(next)
-        } catch (e) {
-          res.status(401).json({ error: 'kyo.sk re-auth failed: no .kyo_pass' })
-        }
-        return
-      }
-      res.status(proxyRes.statusCode).set('Content-Type', 'application/json').send(data)
-    })
-  })
-  proxyReq.on('error', next)
-  if (bodyStr) proxyReq.write(bodyStr)
-  proxyReq.end()
-}
 
 function filePath (filename) {
   return p.join(config.recpath, filename)
