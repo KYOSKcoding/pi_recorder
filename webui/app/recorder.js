@@ -385,8 +385,16 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ value: Number(v) })
+        }).then(() => {
+          // The monitor ffmpeg bakes gain in at spawn — re-pull so the new
+          // gain is heard and metered. A live stream keeps its gain.
+          if (this.listening && !this.streaming && this.feedActive) {
+            this.feedActive = false
+            this.monitorAudio.pause()
+            this.reconcileMonitorFeed()
+          }
         }).catch(e => console.warn('gain set failed:', e))
-      }, 150)
+      }, 200)
     }
 
     async loadGain () {
