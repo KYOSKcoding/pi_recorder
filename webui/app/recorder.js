@@ -9,6 +9,10 @@
       this.recording  = false
       this.streaming  = false
       this.monitoring = false
+      this.listening  = false   // user wants audible monitor playback
+      this.feedActive = false   // monitorAudio is pulling /api/monitor
+      this.meterDisplayed = 0
+      this.audioCtx   = null
       this.durationStart = null
       this.durationTimer = null
 
@@ -33,6 +37,11 @@
       this.fileList      = document.getElementById('fileList')
       this.refreshBtn    = document.getElementById('refreshBtn')
 
+      // Meter + gain DOM
+      this.meterFill     = document.getElementById('meterFill')
+      this.gainSlider    = document.getElementById('gainSlider')
+      this.gainValueEl   = document.getElementById('gainValue')
+
       // Player DOM
       this.playerSection  = document.getElementById('playerSection')
       this.nowPlayingName = document.getElementById('nowPlayingName')
@@ -51,6 +60,7 @@
       this.monitorBtn.addEventListener('click', () => this.handleMonitorToggle())
       this.liveBtn.addEventListener('click', () => this.handleLiveToggle())
       this.refreshBtn.addEventListener('click', () => this.loadFiles())
+      this.gainSlider.addEventListener('input', e => this.handleGainInput(e.target.value))
 
       this.playPauseBtn.addEventListener('click', () => this.handlePlayPause())
       this.prevBtn.addEventListener('click', () => this.loadTrack(this.trackIdx - 1))
@@ -72,6 +82,10 @@
       this.pollStatus()
       setInterval(() => this.pollStatus(), 2000)
       this.loadFiles()
+
+      // Level meter + gain
+      this.loadGain()
+      this.startMeter()
     }
 
     // ── WaveSurfer ────────────────────────────────────────────
@@ -205,9 +219,16 @@
 
     updateStatus (data) {
       var wasRecording = this.recording
+      var wasStreaming = this.streaming
       this.recording = data.recording
       this.streaming = data.streaming || false
       this.monitoring = data.monitoring || false
+      if (wasStreaming !== this.streaming) {
+        // /api/monitor switches backend with streaming state — restart the feed.
+        this.feedActive = false
+        this.monitorAudio.pause()
+        this.reconcileMonitorFeed()
+      }
 
       if (data.recording) {
         this.recIndicator.className = 'toggle-switch on'
@@ -230,13 +251,11 @@
         }
       }
 
-      this.monitorBtn.textContent = this.monitoring ? '■ STOP MONITOR' : '🔊 MONITOR'
-      this.monitorBtn.classList.toggle('active', this.monitoring)
-      this.monitorBtn.disabled = this.streaming
+      this.monitorBtn.textContent = this.listening ? '■ STOP MONITOR' : '🔊 MONITOR'
+      this.monitorBtn.classList.toggle('active', this.listening)
 
       this.liveBtn.textContent = this.streaming ? '■ STOP LIVE' : '● GO LIVE'
       this.liveBtn.classList.toggle('active', this.streaming)
-      this.liveBtn.disabled = this.monitoring
 
       if (data.lastStreamError && !this.streaming) {
         this.streamErrorEl.textContent = data.lastStreamError
@@ -283,31 +302,110 @@
     }
 
     handleMonitorToggle () {
-      if (this.monitoring) {
+      this.listening = !this.listening
+      this.reconcileMonitorFeed()
+      this.monitorBtn.textContent = this.listening ? '■ STOP MONITOR' : '🔊 MONITOR'
+      this.monitorBtn.classList.toggle('active', this.listening)
+    }
+
+    // ── Level meter + gain ────────────────────────────────────
+
+    ensureAudioGraph () {
+      if (this.audioCtx) return
+      try {
+        var AC = window.AudioContext || window.webkitAudioContext
+        this.audioCtx = new AC()
+        // createMediaElementSource may be called only once per element.
+        this.meterSource = this.audioCtx.createMediaElementSource(this.monitorAudio)
+        this.analyser = this.audioCtx.createAnalyser()
+        this.analyser.fftSize = 1024
+        this.meterBuf = new Float32Array(this.analyser.fftSize)
+        this.meterSource.connect(this.analyser)
+      } catch (e) {
+        console.warn('audio graph setup failed:', e)
+      }
+    }
+
+    // Audibility is the analyser→destination link; the analyser always gets
+    // data, so the meter runs whether or not the operator is listening.
+    setAudible (on) {
+      if (!this.audioCtx || !this.analyser) return
+      try { this.analyser.disconnect(this.audioCtx.destination) } catch (e) {}
+      if (on) this.analyser.connect(this.audioCtx.destination)
+    }
+
+    startMeter () {
+      var tick = () => {
+        requestAnimationFrame(tick)
+        var target = 0
+        if (this.analyser) {
+          this.analyser.getFloatTimeDomainData(this.meterBuf)
+          var peak = 0
+          for (var i = 0; i < this.meterBuf.length; i++) {
+            var a = Math.abs(this.meterBuf[i])
+            if (a > peak) peak = a
+          }
+          var db = peak > 0 ? 20 * Math.log10(peak) : -96
+          target = Math.max(0, Math.min(100, ((db + 24) / 24) * 100))
+        }
+        // Snappy rise, smooth fall.
+        this.meterDisplayed = target >= this.meterDisplayed
+          ? target
+          : Math.max(target, this.meterDisplayed - 3)
+        this.meterFill.style.width = this.meterDisplayed.toFixed(1) + '%'
+      }
+      requestAnimationFrame(tick)
+    }
+
+    // Keep monitorAudio pulling /api/monitor whenever the meter needs data
+    // (listening, or streaming live). /api/monitor switches backend between
+    // a dedicated ffmpeg and the live stream's feed, so restart on change.
+    reconcileMonitorFeed () {
+      var wantFeed = this.listening || this.streaming
+      if (wantFeed && !this.feedActive) {
+        this.ensureAudioGraph()
+        if (this.audioCtx && this.audioCtx.state === 'suspended') this.audioCtx.resume()
+        this.monitorAudio.src = '/api/monitor?t=' + Date.now()
+        this.monitorAudio.play().catch(e => console.warn('monitor play failed:', e))
+        this.feedActive = true
+      } else if (!wantFeed && this.feedActive) {
         this.monitorAudio.pause()
         this.monitorAudio.removeAttribute('src')
         this.monitorAudio.load()
-        this.monitoring = false
-        this.monitorBtn.textContent = '🔊 MONITOR'
-        this.monitorBtn.classList.remove('active')
-      } else {
-        this.monitorAudio.src = '/api/monitor'
-        this.monitorAudio.play().catch(e => {
-          console.warn('monitor play failed:', e)
-          this.monitorAudio.removeAttribute('src')
-          this.monitoring = false
-          this.monitorBtn.textContent = '🔊 MONITOR'
-          this.monitorBtn.classList.remove('active')
-        })
-        this.monitoring = true
-        this.monitorBtn.textContent = '■ STOP MONITOR'
-        this.monitorBtn.classList.add('active')
+        this.feedActive = false
       }
+      this.setAudible(this.listening)
+    }
+
+    handleGainInput (v) {
+      this.gainValueEl.textContent = v
+      clearTimeout(this._gainTimer)
+      this._gainTimer = setTimeout(() => {
+        fetch('/api/gain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: Number(v) })
+        }).catch(e => console.warn('gain set failed:', e))
+      }, 150)
+    }
+
+    async loadGain () {
+      try {
+        var r = await fetch('/api/gain')
+        var d = await r.json()
+        if (typeof d.gain === 'number') {
+          this.gainSlider.value = d.gain
+          this.gainValueEl.textContent = d.gain
+        }
+      } catch (e) {}
     }
 
     // ── Live streaming ────────────────────────────────────────
 
     async handleLiveToggle () {
+      // Resume audio in this user gesture so the meter can run during the broadcast.
+      this.ensureAudioGraph()
+      if (this.audioCtx && this.audioCtx.state === 'suspended') this.audioCtx.resume()
       this.liveBtn.disabled = true
       try {
         var url = this.streaming ? '/api/live/stop' : '/api/live/start'

@@ -26,6 +26,17 @@
       <div class="disk-free" id="diskFree"></div>
     </div>
 
+    <!-- Input level meter + gain fader -->
+    <div class="meter-strip">
+      <div class="meter-label">INPUT LEVEL</div>
+      <div class="meter"><div class="meter-fill" id="meterFill"></div></div>
+      <div class="gain-row">
+        <span class="gain-label">GAIN</span>
+        <input type="range" class="gain-slider" id="gainSlider" min="0" max="100" value="50">
+        <span class="gain-value" id="gainValue">50</span>
+      </div>
+    </div>
+
     <!-- Main controls -->
     <div class="btn-row">
       <button class="play-button" id="recBtn">⬤ START REC</button>

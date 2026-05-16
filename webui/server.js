@@ -1,6 +1,7 @@
 const express = require('express')
 const bodyParser = require('body-parser')
 const fs = require('fs')
+const os = require('os')
 const p = require('path')
 const { execSync, spawn } = require('child_process')
 
@@ -9,13 +10,22 @@ const config = {
   host: '0.0.0.0',
   recpath: p.resolve(process.env.RECORD_PATH || '/data/record'),
   statusFile: '/tmp/recorder_status.json',
-  pidFile: '/tmp/recorder.pid'
+  pidFile: '/tmp/recorder.pid',
+  gainFile: p.join(os.homedir(), '.recorder_gain'),
+  alsaCard: '1'
 }
 
 const app = express()
 let streamProc = null
 let monitorProc = null
 let lastStreamError = null
+
+// Browser monitor clients fed from the live stream ffmpeg's stdout.
+const monitorClients = new Set()
+
+// ALSA capture-gain control — discovered at startup, set via amixer.
+let gainControl = null
+let gainValue = 50
 
 app.use('/', express.static(p.join(__dirname, 'app')))
 app.use('/rec', express.static(config.recpath))
@@ -38,8 +48,9 @@ app.get('/api/status', function (req, res, next) {
   } catch (e) { status.diskFree = null }
 
   status.streaming = !!streamProc
-  status.monitoring = !!monitorProc
+  status.monitoring = !!monitorProc || (!!streamProc && monitorClients.size > 0)
   status.lastStreamError = lastStreamError
+  status.gain = gainValue
   res.json(status)
 })
 
@@ -78,16 +89,27 @@ app.post('/api/record/toggle', function (req, res, next) {
   }
 })
 
-// Monitor — streams ALSA input as MP3 to browser for pre-flight check
+// Monitor — streams the raw ALSA input as MP3 to the browser (for the level
+// meter + audible pre-flight check). While streaming, the live ffmpeg already
+// captures the device, so we fan its monitor output (stdout) out instead.
 app.get('/api/monitor', function (req, res) {
-  if (streamProc) return res.status(409).send('Cannot monitor while live')
-  stopMonitor()
   res.setHeader('Content-Type', 'audio/mpeg')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
   res.setHeader('X-Content-Type-Options', 'nosniff')
+
+  if (streamProc) {
+    // Live: attach to the running stream ffmpeg's monitor feed.
+    monitorClients.add(res)
+    const drop = () => { monitorClients.delete(res); if (!res.writableEnded) res.end() }
+    req.on('close', drop)
+    return
+  }
+
+  // Not live: spawn a dedicated monitor ffmpeg.
+  stopMonitor()
   const args = [
-    '-f', 'alsa', '-i', 'hw:1,0',
+    '-f', 'alsa', '-i', 'hw:' + config.alsaCard + ',0',
     '-ar', '44100', '-ac', '2',
     '-acodec', 'libmp3lame', '-b:a', '128k',
     '-f', 'mp3', 'pipe:1'
@@ -111,6 +133,24 @@ app.post('/api/live/stop', function (req, res) {
   res.json({ streaming: false })
 })
 
+// Input gain — sets the HiFiBerry ADC hardware capture gain via amixer.
+app.get('/api/gain', function (req, res) {
+  res.json({ gain: gainValue, control: gainControl })
+})
+
+app.post('/api/gain', function (req, res) {
+  const v = Math.round(Number(req.body && req.body.value))
+  if (!Number.isFinite(v) || v < 0 || v > 100) {
+    return res.status(400).json({ error: 'value must be 0..100' })
+  }
+  gainValue = v
+  try { fs.writeFileSync(config.gainFile, String(v)) } catch (e) {}
+  if (!applyGain(v)) {
+    return res.status(503).json({ error: 'No ALSA capture control found', gain: v })
+  }
+  res.json({ gain: v, control: gainControl })
+})
+
 app.use(function (err, req, res, next) {
   console.error('Error', req.path, err.message)
   res.status(500).send(err.message)
@@ -119,31 +159,101 @@ app.use(function (err, req, res, next) {
 function startStream () {
   if (streamProc) return
   lastStreamError = null
+  const ts = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').replace(/\..+/, '')
+  const wavPath = filePath('LIVE_' + ts + '.wav')
   const args = [
-    '-f', 'alsa', '-i', 'hw:1,0',
+    '-f', 'alsa', '-i', 'hw:' + config.alsaCard + ',0',
     '-ar', '44100', '-ac', '2',
+    // Output 1 — lossless raw archive
+    '-map', '0:a', '-c:a', 'pcm_s16le', wavPath,
+    // Output 2 — the broadcast (DSP chain unchanged)
+    '-map', '0:a',
     '-af', 'volume=8,acompressor=threshold=0.25:ratio=4:attack=5:release=200:makeup=2.5',
     '-acodec', 'libmp3lame', '-b:a', '128k',
-    '-vn', '-f', 'flv', 'rtmp://kyo.sk:45860/live/stream'
+    '-vn', '-f', 'flv', 'rtmp://kyo.sk:45860/live/stream',
+    // Output 3 — raw monitor feed to stdout (browser meter + listening)
+    '-map', '0:a', '-c:a', 'libmp3lame', '-b:a', '96k', '-f', 'mp3', 'pipe:1'
   ]
-  streamProc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  streamProc = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+  // Always drain stdout so ffmpeg never blocks; fan out to monitor clients.
+  streamProc.stdout.on('data', chunk => {
+    for (const r of monitorClients) { try { r.write(chunk) } catch (e) {} }
+  })
   streamProc.stderr.on('data', d => process.stderr.write('[ffmpeg] ' + d))
   streamProc.on('exit', (code) => {
-    lastStreamError = code !== 0 ? `ffmpeg exited (code ${code})` : null
+    lastStreamError = code !== 0 && code !== 255 ? `ffmpeg exited (code ${code})` : null
     streamProc = null
+    for (const r of monitorClients) { if (!r.writableEnded) r.end() }
+    monitorClients.clear()
   })
 }
 
 function stopStream () {
-  if (streamProc) { streamProc.kill(); streamProc = null }
+  if (streamProc) {
+    // SIGINT — ffmpeg finalises all outputs (the WAV header) cleanly.
+    streamProc.kill('SIGINT')
+    streamProc = null
+  }
+  for (const r of monitorClients) { if (!r.writableEnded) r.end() }
+  monitorClients.clear()
 }
 
 function stopMonitor () {
   if (monitorProc) { monitorProc.kill(); monitorProc = null }
 }
 
+// ── ALSA capture gain ───────────────────────────────────────────────────────
+
+/** Find a capture-capable ALSA simple control on the recording card. */
+function discoverGainControl () {
+  try {
+    const out = execSync(`amixer -c ${config.alsaCard} scontrols`).toString()
+    const names = []
+    out.split('\n').forEach(line => {
+      const m = line.match(/Simple mixer control '(.+)',\d+/)
+      if (m) names.push(m[1])
+    })
+    // Prefer obvious capture/ADC controls, else the first that has a capture volume.
+    const preferred = names.find(n => /adc|pga|capture|mic|line/i.test(n))
+    const candidates = preferred ? [preferred, ...names] : names
+    for (const name of candidates) {
+      try {
+        const info = execSync(`amixer -c ${config.alsaCard} sget "${name}"`).toString()
+        if (/Capture channels|Capture\b.*\[\d+%\]/i.test(info)) return name
+      } catch (e) {}
+    }
+  } catch (e) {
+    console.warn('amixer not available:', e.message)
+  }
+  return null
+}
+
+/** Apply gain (0..100) to the discovered capture control. Returns success. */
+function applyGain (v) {
+  if (!gainControl) return false
+  try {
+    execSync(`amixer -c ${config.alsaCard} sset "${gainControl}" ${v}% cap`)
+    return true
+  } catch (e) {
+    console.warn('amixer sset failed:', e.message)
+    return false
+  }
+}
+
+function initGain () {
+  gainControl = discoverGainControl()
+  try { gainValue = Math.min(100, Math.max(0, parseInt(fs.readFileSync(config.gainFile, 'utf8').trim()))) } catch (e) {}
+  if (gainControl) {
+    console.log(`Gain control: "${gainControl}" — applying ${gainValue}%`)
+    applyGain(gainValue)
+  } else {
+    console.warn('No ALSA capture control found — gain slider will be inert')
+  }
+}
+
 app.listen(config.port, config.host, () => {
   console.log(`Server listening ${config.host}:${config.port}`)
+  initGain()
 })
 
 function filePath (filename) {

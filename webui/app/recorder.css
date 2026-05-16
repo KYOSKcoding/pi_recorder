@@ -112,6 +112,87 @@ body {
 .disk-free { font-size: 0.75em; color: #004400; }
 .stream-error { font-size: 0.75em; color: #ff4444; margin: 4px 0; }
 
+/* Input level meter + gain fader */
+.meter-strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 20px;
+}
+
+.meter-label {
+  font-size: 0.7em;
+  color: #00aa00;
+  letter-spacing: 2px;
+}
+
+.meter {
+  width: 280px;
+  height: 14px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  width: 0%;
+  /* Gradient anchored to the full track width so the fill reveals it like an
+     analog-mixer LED ladder: green (safe) → orange (hot) → red (clip). */
+  background: linear-gradient(to right, #00ff00 0%, #00ff00 45%, #ff9900 78%, #ff0000 100%);
+  background-size: 280px 100%;
+  background-repeat: no-repeat;
+}
+
+.gain-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 280px;
+}
+
+.gain-label {
+  font-size: 0.7em;
+  color: #00aa00;
+  letter-spacing: 1px;
+}
+
+.gain-value {
+  font-size: 0.7em;
+  color: #005500;
+  min-width: 26px;
+  text-align: right;
+}
+
+.gain-slider {
+  flex: 1;
+  height: 4px;
+  cursor: pointer;
+  accent-color: #00ff00;
+  background: rgba(0,170,0,0.3);
+  border-radius: 2px;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.gain-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #00ff00;
+  cursor: pointer;
+}
+
+.gain-slider::-moz-range-thumb {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #00ff00;
+  border: none;
+  cursor: pointer;
+}
+
 /* Button row */
 .btn-row {
   display: flex;
