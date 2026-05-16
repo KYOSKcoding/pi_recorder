@@ -12,16 +12,15 @@ const config = {
   statusFile: '/tmp/recorder_status.json',
   pidFile: '/tmp/recorder.pid',
   gainFile: p.join(os.homedir(), '.recorder_gain'),
-  alsaDev: 'hw:1,0'
+  // Shared (dsnoop) ALSA capture — lets the monitor run alongside a local
+  // recording or a live stream. Defined in ~/.asoundrc (see ./asoundrc).
+  alsaDev: 'kyocap'
 }
 
 const app = express()
 let streamProc = null
 let monitorProc = null
 let lastStreamError = null
-
-// Browser monitor clients fed from the live stream ffmpeg's stdout.
-const monitorClients = new Set()
 
 // Input gain — a software multiplier (ffmpeg `volume` filter). The M-Audio
 // Conectiv exposes no ALSA mixer control, so gain is done in ffmpeg.
@@ -53,7 +52,7 @@ app.get('/api/status', function (req, res, next) {
   } catch (e) { status.diskFree = null }
 
   status.streaming = !!streamProc
-  status.monitoring = !!monitorProc || (!!streamProc && monitorClients.size > 0)
+  status.monitoring = !!monitorProc
   status.lastStreamError = lastStreamError
   status.gain = gainValue
   res.json(status)
@@ -94,24 +93,14 @@ app.post('/api/record/toggle', function (req, res, next) {
   }
 })
 
-// Monitor — streams the gained ALSA input as MP3 to the browser (for the level
-// meter + audible pre-flight check). While streaming, the live ffmpeg already
-// holds the device, so we fan its monitor output (stdout) out instead.
+// Monitor — streams the gained capture as MP3 to the browser (for the level
+// meter + audible pre-flight check). The dsnoop device is shared, so this
+// works whether idle, recording locally, or streaming live.
 app.get('/api/monitor', function (req, res) {
   res.setHeader('Content-Type', 'audio/mpeg')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
   res.setHeader('X-Content-Type-Options', 'nosniff')
-
-  if (streamProc) {
-    // Live: attach to the running stream ffmpeg's monitor feed.
-    monitorClients.add(res)
-    const drop = () => { monitorClients.delete(res); if (!res.writableEnded) res.end() }
-    req.on('close', drop)
-    return
-  }
-
-  // Not live: spawn a dedicated monitor ffmpeg (gain baked in at spawn).
   stopMonitor()
   const args = [
     '-f', 'alsa', '-i', config.alsaDev,
@@ -129,7 +118,6 @@ app.get('/api/monitor', function (req, res) {
 
 // Live stream — kyo.sk server auto-detects connection and switches to live mode
 app.post('/api/live/start', function (req, res) {
-  stopMonitor()
   startStream()
   res.json({ streaming: true })
 })
@@ -145,15 +133,13 @@ app.get('/api/gain', function (req, res) {
 })
 
 app.post('/api/gain', function (req, res) {
-  const v = clampGain(Math.round(Number(req.body && req.body.value)))
-  if (!Number.isFinite(Number(req.body && req.body.value))) {
-    return res.status(400).json({ error: 'value must be 0..100' })
-  }
-  gainValue = v
-  try { fs.writeFileSync(config.gainFile, String(v)) } catch (e) {}
-  // The value is baked into ffmpeg at spawn: monitor picks it up on the next
-  // re-pull; a running live stream keeps its gain until restarted.
-  res.json({ gain: v })
+  const raw = Number(req.body && req.body.value)
+  if (!Number.isFinite(raw)) return res.status(400).json({ error: 'value must be 0..100' })
+  gainValue = clampGain(Math.round(raw))
+  try { fs.writeFileSync(config.gainFile, String(gainValue)) } catch (e) {}
+  // Baked into ffmpeg at spawn: the monitor picks it up on the next re-pull;
+  // a running live stream keeps its gain until restarted.
+  res.json({ gain: gainValue })
 })
 
 app.use(function (err, req, res, next) {
@@ -176,22 +162,13 @@ function startStream () {
     '-map', '0:a',
     '-af', 'volume=' + mul + ',acompressor=threshold=0.25:ratio=4:attack=5:release=200:makeup=2.5',
     '-acodec', 'libmp3lame', '-b:a', '128k',
-    '-vn', '-f', 'flv', 'rtmp://kyo.sk:45860/live/stream',
-    // Output 3 — gained monitor feed to stdout (browser meter + listening)
-    '-map', '0:a', '-af', 'volume=' + mul,
-    '-c:a', 'libmp3lame', '-b:a', '96k', '-f', 'mp3', 'pipe:1'
+    '-vn', '-f', 'flv', 'rtmp://kyo.sk:45860/live/stream'
   ]
-  streamProc = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] })
-  // Always drain stdout so ffmpeg never blocks; fan out to monitor clients.
-  streamProc.stdout.on('data', chunk => {
-    for (const r of monitorClients) { try { r.write(chunk) } catch (e) {} }
-  })
+  streamProc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] })
   streamProc.stderr.on('data', d => process.stderr.write('[ffmpeg] ' + d))
   streamProc.on('exit', (code) => {
     lastStreamError = code !== 0 && code !== 255 ? `ffmpeg exited (code ${code})` : null
     streamProc = null
-    for (const r of monitorClients) { if (!r.writableEnded) r.end() }
-    monitorClients.clear()
   })
 }
 
@@ -201,8 +178,6 @@ function stopStream () {
     streamProc.kill('SIGINT')
     streamProc = null
   }
-  for (const r of monitorClients) { if (!r.writableEnded) r.end() }
-  monitorClients.clear()
 }
 
 function stopMonitor () {

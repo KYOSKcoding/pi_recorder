@@ -46,7 +46,9 @@ def record_start():
     now = datetime.now()
     filename = now.strftime("%Y-%m-%d_%H-%M-%S") + ".wav"
     filepath = path.join(record_path, filename)
-    command  = ["arecord", "-D", "hw:1,0", "-f", "S16_LE", "-c", "2", "-r", "44100", filepath]
+    # "kyocap" = shared dsnoop device (see ~/.asoundrc) so the web monitor /
+    # level meter can run alongside a local recording.
+    command  = ["arecord", "-D", "kyocap", "-f", "S16_LE", "-c", "2", "-r", "44100", filepath]
     print("start record: " + filepath)
     p = subprocess.Popen(command)
     write_status(True, filename, now.isoformat())

@@ -219,16 +219,9 @@
 
     updateStatus (data) {
       var wasRecording = this.recording
-      var wasStreaming = this.streaming
       this.recording = data.recording
       this.streaming = data.streaming || false
       this.monitoring = data.monitoring || false
-      if (wasStreaming !== this.streaming) {
-        // /api/monitor switches backend with streaming state — restart the feed.
-        this.feedActive = false
-        this.monitorAudio.pause()
-        this.reconcileMonitorFeed()
-      }
 
       if (data.recording) {
         this.recIndicator.className = 'toggle-switch on'
@@ -265,6 +258,9 @@
       }
 
       this.diskFreeEl.textContent = data.diskFree ? data.diskFree + ' free' : ''
+
+      // Keep the meter feed in sync with monitor / stream / record state.
+      this.reconcileMonitorFeed()
     }
 
     startDurationTimer (isoStart) {
@@ -287,6 +283,9 @@
     }
 
     async handleRecToggle () {
+      // Resume audio in this gesture so the meter runs during local recording.
+      this.ensureAudioGraph()
+      if (this.audioCtx && this.audioCtx.state === 'suspended') this.audioCtx.resume()
       this.recBtn.disabled = true
       try {
         var r = await fetch('/api/record/toggle', { method: 'POST' })
@@ -361,7 +360,9 @@
     // (listening, or streaming live). /api/monitor switches backend between
     // a dedicated ffmpeg and the live stream's feed, so restart on change.
     reconcileMonitorFeed () {
-      var wantFeed = this.listening || this.streaming
+      // The meter wants a feed whenever something is on the (shared) input:
+      // monitoring, streaming live, or recording locally.
+      var wantFeed = this.listening || this.streaming || this.recording
       if (wantFeed && !this.feedActive) {
         this.ensureAudioGraph()
         if (this.audioCtx && this.audioCtx.state === 'suspended') this.audioCtx.resume()
@@ -388,7 +389,7 @@
         }).then(() => {
           // The monitor ffmpeg bakes gain in at spawn — re-pull so the new
           // gain is heard and metered. A live stream keeps its gain.
-          if (this.listening && !this.streaming && this.feedActive) {
+          if (this.feedActive && !this.streaming) {
             this.feedActive = false
             this.monitorAudio.pause()
             this.reconcileMonitorFeed()

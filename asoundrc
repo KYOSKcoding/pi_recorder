@@ -1,0 +1,21 @@
+# Shared ALSA capture for the pi recorder.
+#
+# "kyocap" is a dsnoop device wrapping the M-Audio Conectiv (hw:1,0). dsnoop
+# lets multiple processes read the same capture stream at once, so the web
+# monitor / level meter can run alongside a local recording or a live stream.
+#
+# Deploy: copy to ~/.asoundrc on the Pi (the kypy3 user). server.js and
+# gpio-recorder.py both capture from "kyocap".
+
+pcm.kyocap {
+    type dsnoop
+    ipc_key 4273
+    slave {
+        pcm "hw:1,0"
+        channels 2
+        rate 44100
+        format S16_LE
+        period_size 1024
+        buffer_size 8192
+    }
+}
