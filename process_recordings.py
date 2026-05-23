@@ -127,9 +127,14 @@ def process_file(wav: Path, out_dir: Path, dry_run: bool, genre: str) -> str:
 
     out_size = out_path.stat().st_size
     ratio    = in_size / out_size if out_size else 0
+
+    wav_archive = out_dir / 'WAV_files' / wav.name
+    wav_archive.parent.mkdir(parents=True, exist_ok=True)
+    wav.rename(wav_archive)
+
     return (f'[done]  {wav.name} → {out_path.name}  '
             f'{format_size(in_size)} → {format_size(out_size)}  '
-            f'({ratio:.1f}x smaller)')
+            f'({ratio:.1f}x smaller)  [WAV → WAV_files/]')
 
 
 def main() -> None:

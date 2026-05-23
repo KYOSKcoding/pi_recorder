@@ -151,7 +151,8 @@ function startStream () {
   if (streamProc) return
   lastStreamError = null
   const ts = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').replace(/\..+/, '')
-  const wavPath = filePath('LIVE_' + ts + '.wav')
+  const date = ts.slice(0, 10)
+  const wavPath = filePath(date + '_LIVE.wav')
   const mul = gainMul()
   const args = [
     '-f', 'alsa', '-i', config.alsaDev,

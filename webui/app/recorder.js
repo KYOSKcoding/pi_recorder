@@ -533,7 +533,7 @@
     }
 
     showDownloadModal (file) {
-      var dlFolder = localStorage.getItem('dl_folder') || '~/Downloads'
+      var dlFolder = localStorage.getItem('dl_folder') || '~/Musik/pi_recorder'
       var genre    = localStorage.getItem('dl_genre')  || 'electronic'
       var script   = '~/Nextcloud/KYOSKcoding/pi_recorder/process_recordings.py'
 
@@ -598,7 +598,7 @@
         var g   = genreSelect.value
         localStorage.setItem('dl_folder', dir)
         localStorage.setItem('dl_genre', g)
-        codeEl.textContent = `python3 ${script} \\\n  --src-dir ${dir} --genre ${g} ${dir}`
+        codeEl.textContent = `mkdir -p ${dir}\npython3 ${script} \\\n  --src-dir ${dir} --genre ${g} ${dir}`
       }
       folderInput.addEventListener('input', updateCmd)
       genreSelect.addEventListener('change', updateCmd)
