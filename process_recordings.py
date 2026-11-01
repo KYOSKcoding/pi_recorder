@@ -4,8 +4,9 @@ process_recordings.py — convert Pi WAV recordings to web-ready MP3s.
 
 Pipeline per file:
   silenceremove (strip leading silence + gaps >5s)
-  → acompressor
-  → loudnorm (EBU R128, -16 LUFS)
+  → per-genre EQ + acompressor
+  → loudness finalize: loudnorm (EBU R128, -16 LUFS) for most presets,
+    or dynaudnorm + true-peak limiter for the 'live' preset (louder, no overdrive)
   → libmp3lame VBR ~190 kbps
 
 Usage:
@@ -26,7 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PI_HOST  = 'kypy3@192.168.178.58'
+PI_HOST  = 'kypy3@192.168.1.133'
 PI_SRC   = '/data/record/'
 SILENCE_THRESHOLD_DB = -30.0
 
@@ -56,10 +57,27 @@ GENRE_CHAINS = {
         'equalizer=f=3000:width_type=o:width=2:g=2,'     # voice clarity
         'acompressor=threshold=0.05:ratio=6:attack=3:release=100:makeup=3,'
     ),
+    # Live radio: mixed music + spoken voice at very different levels.
+    # Gentle glue compression, then dynaudnorm evens the music/voice gap and
+    # raises overall loudness, and a true-peak limiter guarantees no overdrive
+    # (fixes the distorted voice that single-pass loudnorm produced).
+    'live': (
+        'highpass=f=40,'
+        'equalizer=f=200:width_type=o:width=2:g=-1.5,'   # tame boom/mud
+        'equalizer=f=3000:width_type=o:width=1.5:g=2,'   # voice presence
+        'equalizer=f=12000:width_type=o:width=2:g=1.5,'  # air
+        'acompressor=threshold=0.125:ratio=3:attack=10:release=250:makeup=1.5,'
+    ),
 }
 LOUDNORM = 'loudnorm=I=-16:TP=-1.5:LRA=11'
 
-DEFAULT_GENRE = 'electronic'
+# Final loudness stage per preset (defaults to LOUDNORM). The 'live' preset
+# uses dynaudnorm (evens music/voice, louder) + brickwall limiter (no overdrive).
+GENRE_FINALIZE = {
+    'live': 'dynaudnorm=f=200:g=15:p=0.9:m=15:s=5,alimiter=limit=0.9:attack=5:release=50',
+}
+
+DEFAULT_GENRE = 'live'
 
 
 def rsync_from_pi(dest: Path) -> None:
@@ -100,8 +118,9 @@ def format_size(b: int) -> str:
 
 
 def build_filtergraph(genre: str) -> str:
-    chain = GENRE_CHAINS.get(genre, GENRE_CHAINS[DEFAULT_GENRE])
-    return SILENCE_PREFIX + chain + LOUDNORM
+    chain    = GENRE_CHAINS.get(genre, GENRE_CHAINS[DEFAULT_GENRE])
+    finalize = GENRE_FINALIZE.get(genre, LOUDNORM)
+    return SILENCE_PREFIX + chain + finalize
 
 
 def process_file(wav: Path, out_dir: Path, dry_run: bool, genre: str) -> str:
@@ -114,6 +133,7 @@ def process_file(wav: Path, out_dir: Path, dry_run: bool, genre: str) -> str:
     cmd = [
         'ffmpeg', '-y', '-i', str(wav),
         '-af', build_filtergraph(genre),
+        '-ac', '1',
         '-codec:a', 'libmp3lame', '-q:a', '2',
         str(out_path)
     ]

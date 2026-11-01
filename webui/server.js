@@ -152,17 +152,22 @@ function startStream () {
   lastStreamError = null
   const ts = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').replace(/\..+/, '')
   const date = ts.slice(0, 10)
-  const wavPath = filePath(date + '_LIVE.wav')
+  // Date-first name for the day's first stream; fall back to a time-stamped
+  // name on later streams so ffmpeg never refuses to overwrite the master.
+  let wavPath = filePath(date + '_LIVE.wav')
+  if (fs.existsSync(wavPath)) wavPath = filePath(date + '_' + ts.slice(11) + '_LIVE.wav')
   const mul = gainMul()
   const args = [
     '-f', 'alsa', '-i', config.alsaDev,
     '-ar', '44100', '-ac', '2',
     // Output 1 — lossless raw archive (pre-gain master)
     '-map', '0:a', '-c:a', 'pcm_s16le', wavPath,
-    // Output 2 — the broadcast: input gain + compressor
+    // Output 2 — the broadcast: input gain + compressor, mono 96k
+    // (DJM-600 sources are mono; one channel at 96k beats stereo 128k)
     '-map', '0:a',
     '-af', 'volume=' + mul + ',acompressor=threshold=0.25:ratio=4:attack=5:release=200:makeup=2.5',
-    '-acodec', 'libmp3lame', '-b:a', '128k',
+    '-ac', '1',
+    '-acodec', 'libmp3lame', '-b:a', '96k',
     '-vn', '-f', 'flv', 'rtmp://kyo.sk:45860/live/stream'
   ]
   streamProc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] })

@@ -35,6 +35,7 @@
       this.streamErrorEl = document.getElementById('streamError')
       this.liveBtn       = document.getElementById('liveBtn')
       this.fileList      = document.getElementById('fileList')
+      this.syncAllBtn    = document.getElementById('syncAllBtn')
       this.refreshBtn    = document.getElementById('refreshBtn')
 
       // Meter + gain DOM
@@ -59,6 +60,7 @@
       this.recBtn.addEventListener('click', () => this.handleRecToggle())
       this.monitorBtn.addEventListener('click', () => this.handleMonitorToggle())
       this.liveBtn.addEventListener('click', () => this.handleLiveToggle())
+      this.syncAllBtn.addEventListener('click', () => this.showSyncModal())
       this.refreshBtn.addEventListener('click', () => this.loadFiles())
       this.gainSlider.addEventListener('input', e => this.handleGainInput(e.target.value))
 
@@ -532,9 +534,77 @@
       ta.remove()
     }
 
+    showSyncModal () {
+      var genre  = localStorage.getItem('dl_genre') || 'live'
+      var script = '~/Nextcloud/KYOSKcoding/pi_recorder/process_recordings.py'
+      var dir    = '~/Musik/pi_recorder'
+
+      var modal = document.createElement('div')
+      modal.className = 'convert-modal'
+      var inner = document.createElement('div')
+      inner.className = 'convert-modal-inner'
+
+      var title = document.createElement('div')
+      title.className = 'convert-title'
+      title.textContent = 'DOWNLOAD ALL'
+
+      var row = document.createElement('div')
+      row.className = 'convert-row'
+      var rlabel = document.createElement('label')
+      rlabel.className = 'convert-row-label'
+      rlabel.textContent = 'genre'
+      var genreSelect = document.createElement('select')
+      genreSelect.className = 'convert-select'
+      ;['electronic', 'acoustic', 'podcast', 'live'].forEach(g => {
+        var opt = document.createElement('option')
+        opt.value = g; opt.textContent = g
+        if (g === genre) opt.selected = true
+        genreSelect.appendChild(opt)
+      })
+      row.append(rlabel, genreSelect)
+
+      var codeEl = document.createElement('code')
+      codeEl.className = 'convert-cmd'
+
+      var updateCmd = () => {
+        var g = genreSelect.value
+        localStorage.setItem('dl_genre', g)
+        codeEl.textContent = `python3 ${script} \\\n  --src-pi --genre ${g} ${dir}`
+      }
+      genreSelect.addEventListener('change', updateCmd)
+      updateCmd()
+
+      var actions = document.createElement('div')
+      actions.className = 'convert-actions'
+      var copyBtn = document.createElement('button')
+      copyBtn.className = 'nav-btn'
+      copyBtn.textContent = 'copy command'
+      copyBtn.addEventListener('click', () => {
+        var text = codeEl.textContent
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(text).catch(() => this.fallbackCopy(text))
+        } else {
+          this.fallbackCopy(text)
+        }
+        copyBtn.textContent = '✓ copied!'
+        setTimeout(() => { copyBtn.textContent = 'copy command' }, 1500)
+      })
+      var closeBtn = document.createElement('button')
+      closeBtn.className = 'nav-btn'
+      closeBtn.textContent = 'close'
+      closeBtn.addEventListener('click', () => modal.remove())
+      actions.append(copyBtn, closeBtn)
+
+      modal.addEventListener('click', e => { if (e.target === modal) modal.remove() })
+      inner.append(title, row, codeEl, actions)
+      modal.appendChild(inner)
+      document.body.appendChild(modal)
+    }
+
     showDownloadModal (file) {
-      var dlFolder = localStorage.getItem('dl_folder') || '~/Musik/pi_recorder'
-      var genre    = localStorage.getItem('dl_genre')  || 'electronic'
+      var dlFolder = localStorage.getItem('dl_folder')
+      if (!dlFolder || dlFolder === '~/Downloads') dlFolder = '~/Musik/pi_recorder'
+      var genre    = localStorage.getItem('dl_genre')  || 'live'
       var script   = '~/Nextcloud/KYOSKcoding/pi_recorder/process_recordings.py'
 
       var modal = document.createElement('div')
@@ -570,7 +640,7 @@
       r2label.textContent = 'genre'
       var genreSelect = document.createElement('select')
       genreSelect.className = 'convert-select'
-      ;['electronic', 'acoustic', 'podcast'].forEach(g => {
+      ;['electronic', 'acoustic', 'podcast', 'live'].forEach(g => {
         var opt = document.createElement('option')
         opt.value = g; opt.textContent = g
         if (g === genre) opt.selected = true
@@ -598,7 +668,7 @@
         var g   = genreSelect.value
         localStorage.setItem('dl_folder', dir)
         localStorage.setItem('dl_genre', g)
-        codeEl.textContent = `mkdir -p ${dir}\npython3 ${script} \\\n  --src-dir ${dir} --genre ${g} ${dir}`
+        codeEl.textContent = `python3 ${script} \\\n  --src-pi --genre ${g} ${dir}`
       }
       folderInput.addEventListener('input', updateCmd)
       genreSelect.addEventListener('change', updateCmd)
