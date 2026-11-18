@@ -25,7 +25,8 @@ gpio-recorder.py  ←─ SIGUSR1 ─── server.js
 
 ```bash
 # Deploy (from dev machine)
-rsync -av gpio-recorder.py webui/server.js kypy3@192.168.178.58:~/pi-recorder/
+rsync -av gpio-recorder.py kypy3@192.168.178.58:~/pi-recorder/
+rsync -av webui/server.js kypy3@192.168.178.58:~/pi-recorder/webui/   # the service runs ~/pi-recorder/webui/server.js
 rsync -av webui/app/index.html webui/app/recorder.css webui/app/recorder.js kypy3@192.168.178.58:~/pi-recorder/webui/app/
 ssh kypy3@192.168.178.58 "chmod +x ~/pi-recorder/gpio-recorder.py && systemctl --user restart pirecorder-record pirecorder-webui"
 
