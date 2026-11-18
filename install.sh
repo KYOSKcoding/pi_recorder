@@ -113,10 +113,8 @@ echo ""
 echo "If recorder.local does not resolve, add to /etc/hosts on your client:"
 echo "  echo \"$IP $HOST.local\" | sudo tee -a /etc/hosts"
 echo ""
-echo "Optional — enable kyo.sk 'Go Live' integration:"
-echo "  echo 'your_kyo_broadcaster_password' > ~/.kyo_pass"
-echo "  chmod 600 ~/.kyo_pass"
-echo "  systemctl --user restart pirecorder-webui"
+echo "To stream to kyo.sk, store the stream key (ask whoever runs the kyo.sk server):"
+echo "  read -rsp 'Stream key: ' k && printf '%s\n' \"\$k\" > ~/.kyo_stream_key && chmod 600 ~/.kyo_stream_key; unset k"
 echo ""
 if grep -q "hifiberry-dacplusadc" "$BOOTCONF" 2>/dev/null; then
     if ! aplay -l 2>/dev/null | grep -q -i "hifiberry\|dacplusadc"; then

@@ -14,7 +14,13 @@ const config = {
   gainFile: p.join(os.homedir(), '.recorder_gain'),
   // Shared (dsnoop) ALSA capture — lets the monitor run alongside a local
   // recording or a live stream. Defined in ~/.asoundrc (see ./asoundrc).
-  alsaDev: 'kyocap'
+  alsaDev: 'kyocap',
+  // kyo.sk only accepts streams with the secret stream key, over RTMPS. The key
+  // lives only in this file (chmod 600), never in git — see README "kyo.sk".
+  streamKeyFile: p.join(os.homedir(), '.kyo_stream_key'),
+  streamBase: 'rtmps://kyo.sk:45860/live/',
+  // Check kyo.sk's certificate, so nobody on the venue network can catch the key.
+  caFile: '/etc/ssl/certs/ca-certificates.crt'
 }
 
 const app = express()
@@ -119,7 +125,7 @@ app.get('/api/monitor', function (req, res) {
 // Live stream — kyo.sk server auto-detects connection and switches to live mode
 app.post('/api/live/start', function (req, res) {
   startStream()
-  res.json({ streaming: true })
+  res.json({ streaming: !!streamProc, error: lastStreamError })
 })
 
 app.post('/api/live/stop', function (req, res) {
@@ -147,9 +153,22 @@ app.use(function (err, req, res, next) {
   res.status(500).send(err.message)
 })
 
+function streamUrl () {
+  let key = ''
+  try { key = fs.readFileSync(config.streamKeyFile, 'utf8').trim() } catch (e) {}
+  if (!/^[A-Za-z0-9]{16,64}$/.test(key)) return null
+  return config.streamBase + key
+}
+
 function startStream () {
   if (streamProc) return
   lastStreamError = null
+  const url = streamUrl()
+  if (!url) {
+    lastStreamError = 'No stream key: put it into ~/.kyo_stream_key (see README)'
+    return
+  }
+  const tlsArgs = fs.existsSync(config.caFile) ? ['-tls_verify', '1', '-ca_file', config.caFile] : []
   const ts = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').replace(/\..+/, '')
   const date = ts.slice(0, 10)
   // Date-first name for the day's first stream; fall back to a time-stamped
@@ -168,7 +187,8 @@ function startStream () {
     '-af', 'volume=' + mul + ',acompressor=threshold=0.25:ratio=4:attack=5:release=200:makeup=2.5',
     '-ac', '1',
     '-acodec', 'libmp3lame', '-b:a', '96k',
-    '-vn', '-f', 'flv', 'rtmp://kyo.sk:45860/live/stream'
+    ...tlsArgs,
+    '-vn', '-f', 'flv', url
   ]
   streamProc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] })
   streamProc.stderr.on('data', d => process.stderr.write('[ffmpeg] ' + d))

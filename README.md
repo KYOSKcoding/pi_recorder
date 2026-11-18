@@ -33,22 +33,25 @@ After install, open **`http://<pi-ip>:8080`** in a browser on your local network
 |---|---|
 | **Record** | Push physical button, or click **⬤ START REC** in the web UI |
 | **Listen back** | Click any recording in the list — waveform player with prev/next, volume |
-| **Stream live** | Click **⚡ STREAM LIVE** — sends audio to `rtmp://kyo.sk:45860/live/stream` |
-| **Go Live on kyo.sk** | Click **● GO LIVE ON KYO.SK** — toggles live mode for web listeners at kyo.sk/radio |
+| **Go live on kyo.sk** | Click **● GO LIVE** — streams to kyo.sk over RTMPS with the stream key; kyo.sk switches its listeners at kyo.sk/radio to live by itself (and back when you stop) |
 | **Delete recordings** | DEL button next to each file |
 | **Download** | ↓ button next to each file |
 
-## kyo.sk integration
+## kyo.sk
 
-The "Go Live" button works without any browser login. Set up once via SSH:
+**● GO LIVE** streams to `rtmps://kyo.sk:45860/live/<stream key>`. kyo.sk only accepts streams with
+the secret stream key. As soon as the stream arrives, it switches the listeners at kyo.sk/radio to
+live, and back when you stop. The key lives only on the Pi, never in git. Whoever runs the kyo.sk
+server has it (`STREAM_KEY` in `~/.config/kyo-radio/secrets.env` there). Set it up once on the Pi:
 
 ```bash
-echo "your_broadcaster_password" > ~/.kyo_pass
-chmod 600 ~/.kyo_pass
-systemctl --user restart pirecorder-webui
+read -rsp 'Stream key: ' k && printf '%s\n' "$k" > ~/.kyo_stream_key && chmod 600 ~/.kyo_stream_key; unset k
 ```
 
-The server authenticates with kyo.sk on startup and keeps the session alive. The button is hidden if `~/.kyo_pass` is not present.
+No restart is needed: the key is read each time you press GO LIVE. Without a key file the UI shows
+"No stream key …" instead of streaming. ffmpeg checks kyo.sk's TLS certificate against
+`/etc/ssl/certs/ca-certificates.crt`, so nobody on the venue network can catch the key. If the key
+is ever changed on the server, write the new one into `~/.kyo_stream_key`.
 
 ## Configuration
 
@@ -57,7 +60,7 @@ The server authenticates with kyo.sk on startup and keeps the session alive. The
 | Recording path | `/data/record` | `RECORD_PATH=/your/path node webui/server.js` |
 | Web UI port | `8080` | edit `config.port` in `webui/server.js` |
 | ALSA device | `hw:1,0` | edit `gpio-recorder.py` and `webui/server.js` |
-| kyo.sk password | — | `~/.kyo_pass` (see above) |
+| kyo.sk stream key | — | `~/.kyo_stream_key` (see above) |
 
 ## How it works
 
@@ -74,8 +77,7 @@ Two systemd user services run continuously:
 - Serves the frontend (pure vanilla JS, no build step)
 - Polls `/tmp/recorder_status.json` for the status bar
 - Sends `SIGUSR1` to the recorder process for web-triggered record toggle
-- Spawns `ffmpeg` for RTMP live streaming with audio compression
-- Proxies kyo.sk API calls over HTTPS for the Go Live feature
+- Spawns `ffmpeg` for the RTMPS live stream to kyo.sk (with audio compression), plus a lossless WAV copy
 
 The frontend uses [WaveSurfer.js](https://wavesurfer.xyz/) (loaded from CDN) for waveform playback.
 
